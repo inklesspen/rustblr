@@ -5,6 +5,7 @@ extern crate curl;
 extern crate oauth_client as oauth;
 extern crate rand;
 extern crate url;
+extern crate serde_json;
 
 use sqlhaver::exists_checker;
 use std::io;
@@ -15,12 +16,13 @@ use std::collections::HashMap;
 use self::curl::http::handle::Method;  // required by oauth_client :(
 use self::oauth::Token;
 use self::url::Url;
+use self::serde_json::Value;
 
 mod api {
     pub const REQUEST_TOKEN: &'static str = "https://www.tumblr.com/oauth/request_token";
     pub const AUTHORIZE: &'static str = "https://www.tumblr.com/oauth/authorize";
     pub const ACCESS_TOKEN: &'static str = "https://www.tumblr.com/oauth/access_token";
-    //pub const USER_INFO: &'static str = "https://api.tumblr.com/v2/user/info";
+    pub const USER_INFO: &'static str = "https://api.tumblr.com/v2/user/info";
 }
 
 fn split_query<'a>(query: &'a str) -> HashMap<Cow<'a, str>, Cow<'a, str>> {
@@ -101,3 +103,37 @@ pub fn authorize(conn: rusqlite::Connection) {
     tx.commit().unwrap();
 }
 
+
+const ACCESS_QUERY: &'static str = "SELECT key, secret FROM access";
+
+pub fn load_access_token(conn: &rusqlite::Connection) -> Option<Token> {
+    conn.query_row(ACCESS_QUERY, &[], |row| {
+        let key: String = row.get(0);
+        let secret: String = row.get(1);
+        Token::new(key, secret)
+    }).ok()
+}
+
+pub fn check_status(conn: rusqlite::Connection) {
+    let consumer_token = super::consumer::get_token(&conn).unwrap();
+    let access_token = load_access_token(&conn).unwrap();
+    let header = oauth::authorization_header(Method::Get, api::USER_INFO, &consumer_token, Some(&access_token), None);
+    let client = hyper::Client::new();
+    let res = client.get(api::USER_INFO)
+        .header(hyper::header::Authorization(header.to_owned()))
+        .send().unwrap();
+    match res.status {
+        hyper::status::StatusCode::Ok => {
+            let data: Value = serde_json::from_reader(res).unwrap();
+            let username = data.lookup("response.user.name").and_then(|val| val.as_string()).unwrap();
+            println!("Authorized. Username: {}", username);
+
+        },
+        hyper::status::StatusCode::Unauthorized => {
+            println!("Unauthorized!")
+        },
+        _ => {
+            println!("Got status of {:?}, which was unexpected.", res.status);
+        }
+    }
+}

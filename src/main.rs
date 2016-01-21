@@ -31,7 +31,7 @@ fn main() {
             authorize::authorize(conn);
         },
         ("status", _) => {
-            println!("other stuff");
+            authorize::check_status(conn);
         }
         _ => {
             panic!("at the disco");
