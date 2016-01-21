@@ -8,12 +8,11 @@ extern crate url;
 
 use sqlhaver::exists_checker;
 use std::io;
+use std::io::Read;
 use std::io::Write;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::str;
-use self::curl::http;
-use self::curl::http::handle::Method;
+use self::curl::http::handle::Method;  // required by oauth_client :(
 use self::oauth::Token;
 use self::url::Url;
 
@@ -37,15 +36,14 @@ fn split_query<'a>(query: &'a str) -> HashMap<Cow<'a, str>, Cow<'a, str>> {
 
 fn get_request_token(consumer: &Token) -> Token<'static> {
     let header = oauth::authorization_header(Method::Get, api::REQUEST_TOKEN, consumer, None, None);
-    let resp = http::handle()
-                   .get(api::REQUEST_TOKEN)
-                   .header("Authorization", header.as_ref())
-                   .exec()
-                   .unwrap();
-    let resp = str::from_utf8(resp.get_body())
-                   .unwrap()
-                   .to_string();
-    let param = split_query(resp.as_ref());
+    let mut resp = hyper::Client::new()
+        .get(api::REQUEST_TOKEN)
+        .header(hyper::header::Authorization(header.to_owned()))
+        .send()
+        .unwrap();
+    let mut buf: String = String::new();
+    resp.read_to_string(&mut buf).unwrap();
+    let param = split_query(buf.as_ref());
     Token::new(param.get("oauth_token").unwrap().to_string(),
                param.get("oauth_token_secret").unwrap().to_string())
 }
@@ -58,15 +56,14 @@ fn get_access_token(consumer: &Token, request: &Token, verifier: &str) -> Token<
                                              consumer,
                                              Some(request),
                                              Some(&param));
-    let resp = http::handle()
-                   .get(api::ACCESS_TOKEN)
-                   .header("Authorization", header.as_ref())
-                   .exec()
-                   .unwrap();
-    let resp = str::from_utf8(resp.get_body())
-                   .unwrap()
-                   .to_string();
-    let param = split_query(resp.as_ref());
+    let mut resp = hyper::Client::new()
+        .get(api::ACCESS_TOKEN)
+        .header(hyper::header::Authorization(header.to_owned()))
+        .send()
+        .unwrap();
+    let mut buf: String = String::new();
+    resp.read_to_string(&mut buf).unwrap();
+    let param = split_query(buf.as_ref());
     Token::new(param.get("oauth_token").unwrap().to_string(),
                param.get("oauth_token_secret").unwrap().to_string())
 }
@@ -83,11 +80,6 @@ fn authorize_request(request: &Token) -> Option<String> {
     Some(verifier.trim().to_string())
 }
 
-//fn get_user_info(consumer: &Token, access: &Token) {
-    
-    //let header = oauth::authorization_header(Method::Post, api::ECHO, consumer, Some(access), None);
-//}
-
 pub fn authorize(conn: rusqlite::Connection) {
     let consumer_token = super::consumer::get_token(&conn).unwrap();
 
@@ -102,7 +94,6 @@ pub fn authorize(conn: rusqlite::Connection) {
         conn.execute("DELETE FROM access", &[]).unwrap();
     }
 
-    //println!("consumer: {:?}", consumer_token);
     let request_token = get_request_token(&consumer_token);
     let verifier = authorize_request(&request_token).unwrap();
     let access_token = get_access_token(&consumer_token, &request_token, &verifier);
